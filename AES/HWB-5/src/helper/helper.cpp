@@ -1,0 +1,32 @@
+//
+// Created by Olaf Bykowski on 29/10/2024.
+//
+
+#include "helper.h"
+#include <cstdio>
+#include <cstdint>
+
+/* Helper functions */
+void hexprint16(uint8_t *p) {
+    for (int i = 0; i < 16; i++)
+        printf("%02hhx ", p[i]);
+    puts("");
+}
+
+void hexprintw(uint32_t w) {
+    for (int i = 0; i < 32; i += 8)
+        printf("%02hhx ", (w >> i) & 0xffU);
+}
+
+void hexprintws(uint32_t * p, int cnt) {
+    for (int i = 0; i < cnt; i++)
+        hexprintw(p[i]);
+    puts("");
+}
+void printstate(t_state s) {
+    hexprintw(s[0]);
+    hexprintw(s[1]);
+    hexprintw(s[2]);
+    hexprintw(s[3]);
+    puts("");
+}
