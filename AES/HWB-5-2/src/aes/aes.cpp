@@ -11,38 +11,110 @@ typedef uint32_t t_state[4];
 
 uint32_t T0[256], T1[256], T2[256], T3[256];
 
-// Helper function for multiplication in GF(2^8)
-uint8_t mul(uint8_t a, uint8_t b) {
+// Multiply in GF(2^8) and reduce by AES polynomial if necessary
+uint8_t GFMult(uint8_t a, uint8_t b) {
     uint8_t p = 0;
-    for (int i = 0; i < 8; ++i) {
-        if (b & 1) p ^= a;
-        bool high_bit_set = (a & 0x80) != 0;
+    for (int counter = 0; counter < 8; counter++) {
+        if (b & 1)
+            p ^= a;
+        uint8_t hi_bit_set = a & 0x80;
         a <<= 1;
-        if (high_bit_set) a ^= 0x1b;
+        if (hi_bit_set)
+            a ^= 0x1b;
         b >>= 1;
     }
     return p;
 }
 
+
+// Concatenate four bytes to form a 32-bit word
+uint32_t ConCat(uint8_t b0, uint8_t b1, uint8_t b2, uint8_t b3) {
+    return (b0 << 24) | (b1 << 16) | (b2 << 8) | b3;
+}
+
 // Function to generate T-boxes
 void generateTBoxes() {
-    for (int i = 0; i < 256; ++i) {
+    for (int i = 0; i < 256; i++) {
         uint8_t s = SBOX[i];
-        T0[i] = (mul(0x02, s) << 24) | (s << 16) | (s << 8) | mul(0x03, s);
-        T1[i] = (mul(0x03, s) << 24) | (mul(0x02, s) << 16) | (s << 8) | s;
-        T2[i] = (s << 24) | (mul(0x03, s) << 16) | (mul(0x02, s) << 8) | s;
-        T3[i] = (s << 24) | (s << 16) | (mul(0x03, s) << 8) | mul(0x02, s);
+        uint8_t s2 = GFMult(s, 0x02);
+        uint8_t s3 = GFMult(s, 0x03);
+        T0[i] = WORD(s2, s, s, s3);
+        T1[i] = WORD(s3, s2, s, s);
+        T2[i] = WORD(s, s3, s2, s);
+        T3[i] = WORD(s, s, s3, s2);
     }
 }
 
-// **************** AES  functions ****************
+// **************** AES Functions ****************
 uint32_t subWord(uint32_t w) {
     return WORD(SBOX[WBYTE(w, 0)], SBOX[WBYTE(w, 1)], SBOX[WBYTE(w, 2)], SBOX[WBYTE(w, 3)]);
 }
 
-// 4.2.1 Multiplication by x in GF(2^8)
-uint8_t xtime(uint8_t a) {
-    return (a << 1) ^ ((a >> 7) * 0x1b);
+void subBytes(t_state s) {
+    for (int i = 0; i < 4; i++) {
+        s[i] = WORD(SBOX[WBYTE(s[i], 0)], SBOX[WBYTE(s[i], 1)], SBOX[WBYTE(s[i], 2)], SBOX[WBYTE(s[i], 3)]);
+    }
+}
+
+void shiftRows(t_state s) {
+    uint8_t temp[16];
+
+    for (int i = 0; i < 4; i++) {
+        temp[i] = WBYTE(s[0], i);
+        temp[i + 4] = WBYTE(s[1], i);
+        temp[i + 8] = WBYTE(s[2], i);
+        temp[i + 12] = WBYTE(s[3], i);
+    }
+
+    uint8_t t;
+
+    // Row 1 shifts left by 1
+    t = temp[1];
+    temp[1] = temp[5];
+    temp[5] = temp[9];
+    temp[9] = temp[13];
+    temp[13] = t;
+
+    // Row 2 shifts left by 2
+    t = temp[2];
+    uint8_t t2 = temp[6];
+    temp[2] = temp[10];
+    temp[6] = temp[14];
+    temp[10] = t;
+    temp[14] = t2;
+
+    // Row 3 shifts left by 3
+    t = temp[3];
+    temp[3] = temp[15];
+    temp[15] = temp[11];
+    temp[11] = temp[7];
+    temp[7] = t;
+
+    s[0] = WORD(temp[0], temp[1], temp[2], temp[3]);
+    s[1] = WORD(temp[4], temp[5], temp[6], temp[7]);
+    s[2] = WORD(temp[8], temp[9], temp[10], temp[11]);
+    s[3] = WORD(temp[12], temp[13], temp[14], temp[15]);
+}
+
+void tboxLookup(t_state s) {
+    uint8_t s_bytes[16];
+    // Extract bytes from state
+    for (int col = 0; col < 4; col++) {
+        uint32_t col_word = s[col];
+        for (int row = 0; row < 4; row++) {
+            s_bytes[col * 4 + row] = WBYTE(col_word, row);
+        }
+    }
+    // T-box lookup
+    uint32_t e[4];
+    e[0] = T0[s_bytes[0]] ^ T1[s_bytes[5]] ^ T2[s_bytes[10]] ^ T3[s_bytes[15]];
+    e[1] = T0[s_bytes[4]] ^ T1[s_bytes[9]] ^ T2[s_bytes[14]] ^ T3[s_bytes[3]];
+    e[2] = T0[s_bytes[8]] ^ T1[s_bytes[13]] ^ T2[s_bytes[2]] ^ T3[s_bytes[7]];
+    e[3] = T0[s_bytes[12]] ^ T1[s_bytes[1]] ^ T2[s_bytes[6]] ^ T3[s_bytes[11]];
+    // Update state
+    for (int col = 0; col < 4; col++) {
+        s[col] = e[col];
+    }
 }
 
 void expandKey(uint8_t k[16], uint32_t ek[44]) {
@@ -68,8 +140,7 @@ void addRoundKey(t_state s, uint32_t ek[], short round) {
 void aes(uint8_t *in, uint8_t *out, uint8_t *skey) {
     t_state state;
 
-    // Initialize state from input
-    for (int i = 0; i < 4; ++i) {
+    for (int i = 0; i < 4; i++) {
         state[i] = WORD(in[i * 4], in[i * 4 + 1], in[i * 4 + 2], in[i * 4 + 3]);
     }
 
@@ -78,37 +149,20 @@ void aes(uint8_t *in, uint8_t *out, uint8_t *skey) {
 
     addRoundKey(state, expKey, 0);
 
-    for (unsigned short round = 1; round < 10; ++round) {
-        uint32_t t0 = T0[WBYTE(state[0], 0)] ^ T1[WBYTE(state[1], 1)] ^ T2[WBYTE(state[2], 2)] ^ T3[WBYTE(state[3], 3)];
-        uint32_t t1 = T0[WBYTE(state[1], 0)] ^ T1[WBYTE(state[2], 1)] ^ T2[WBYTE(state[3], 2)] ^ T3[WBYTE(state[0], 3)];
-        uint32_t t2 = T0[WBYTE(state[2], 0)] ^ T1[WBYTE(state[3], 1)] ^ T2[WBYTE(state[0], 2)] ^ T3[WBYTE(state[1], 3)];
-        uint32_t t3 = T0[WBYTE(state[3], 0)] ^ T1[WBYTE(state[0], 1)] ^ T2[WBYTE(state[1], 2)] ^ T3[WBYTE(state[2], 3)];
-
-        state[0] = t0;
-        state[1] = t1;
-        state[2] = t2;
-        state[3] = t3;
+    for (unsigned short round = 1; round < 10; round++) {
+        tboxLookup(state);
         addRoundKey(state, expKey, round);
     }
 
-    // Final round without MixColumns
-    uint32_t t0 = (SBOX[WBYTE(state[0], 0)] << 24) | (SBOX[WBYTE(state[1], 1)] << 16) | (SBOX[WBYTE(state[2], 2)] << 8) | SBOX[WBYTE(state[3], 3)];
-    uint32_t t1 = (SBOX[WBYTE(state[1], 0)] << 24) | (SBOX[WBYTE(state[2], 1)] << 16) | (SBOX[WBYTE(state[3], 2)] << 8) | SBOX[WBYTE(state[0], 3)];
-    uint32_t t2 = (SBOX[WBYTE(state[2], 0)] << 24) | (SBOX[WBYTE(state[3], 1)] << 16) | (SBOX[WBYTE(state[0], 2)] << 8) | SBOX[WBYTE(state[1], 3)];
-    uint32_t t3 = (SBOX[WBYTE(state[3], 0)] << 24) | (SBOX[WBYTE(state[0], 1)] << 16) | (SBOX[WBYTE(state[1], 2)] << 8) | SBOX[WBYTE(state[2], 3)];
-
-    state[0] = t0;
-    state[1] = t1;
-    state[2] = t2;
-    state[3] = t3;
+    subBytes(state);
+    shiftRows(state);
     addRoundKey(state, expKey, 10);
 
-    // Output state to out array
-    for (int i = 0; i < 16; ++i) {
-        if (i < 4) out[i] = WBYTE(state[0], i % 4);
-        else if (i < 8) out[i] = WBYTE(state[1], i % 4);
-        else if (i < 12) out[i] = WBYTE(state[2], i % 4);
-        else out[i] = WBYTE(state[3], i % 4);
+    // Store the output
+    for (int i = 0; i < 4; i++) {
+        uint32_t col = state[i];
+        for (int row = 0; row < 4; row++) {
+            out[i * 4 + row] = WBYTE(col, row);
+        }
     }
 }
-

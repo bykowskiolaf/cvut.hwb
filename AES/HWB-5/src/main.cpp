@@ -10,7 +10,7 @@ Template: Jiri Bucek 2017
 AES specification: http://csrc.nist.gov/publications/fips/fips197/fips-197.pdf
 */
 
-constexpr int DEFAULT_ITERATIONS = 1'000'000;  // Default number of iterations for averaging
+constexpr int DEFAULT_ITERATIONS = 10'000'000;  // Default number of iterations for averaging
 
 int main(int argc, char *argv[]) {
     // Determine number of iterations from command-line argument, or use default
